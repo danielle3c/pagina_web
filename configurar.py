@@ -1,88 +1,64 @@
 import cv2
 import numpy as np
-import os
 
-# ====== Función para cargar imágenes de una carpeta ======
-def cargar_imagenes(carpeta):
-    imagenes = []
-    for archivo in os.listdir(carpeta):
-        ruta = os.path.join(carpeta, archivo)
-        img = cv2.imread(ruta, 0)  # Cargar en escala de grises
-        if img is not None:
-            imagenes.append(img)
-    return imagenes
+# Ruta de la imagen de referencia
+imagen_ref_path = r"c:\Users\cuarto_4c\Documents\botella\FANTA-250CC-DESECHABLE.jpg"
+img_ref = cv2.imread(imagen_ref_path, 0)  # Leer en escala de grises
 
-# ====== Cargar imágenes de referencia por categoría ======
-carpeta_botellas = r"C:\Users\programacion 4C 2025\Documents\botella"
-carpeta_latas = r"C:\Users\programacion 4C 2025\Documents\latas"
-carpeta_cajas = r"C:\Users\programacion 4C 2025\Documents\jugo"
+# Verificar que la imagen se cargó
+if img_ref is None:
+    raise FileNotFoundError(f"No se encontró la imagen en: {imagen_ref_path}")
 
-ref_botellas = cargar_imagenes(carpeta_botellas)
-ref_latas = cargar_imagenes(carpeta_latas)
-ref_cajas = cargar_imagenes(carpeta_cajas)
+# Crear detector ORB
+orb = cv2.ORB_create(nfeatures=1000)
+kp_ref, des_ref = orb.detectAndCompute(img_ref, None)
 
-# ====== Crear ORB ======
-orb = cv2.ORB_create()
-bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+# Configurar FLANN para ORB (usa LSH)
+FLANN_INDEX_LSH = 6
+index_params = dict(algorithm=FLANN_INDEX_LSH,
+                    table_number=6,      # 12 en algunos casos
+                    key_size=12,         # 20 en algunos casos
+                    multi_probe_level=1) # 2 en algunos casos
+search_params = dict(checks=50)
+flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-# Precomputar descriptores para cada categoría
-def compute_descriptors(lista_imagenes):
-    descriptores = []
-    for img in lista_imagenes:
-        kp, des = orb.detectAndCompute(img, None)
-        if des is not None:
-            descriptores.append(des)
-    return descriptores
-
-des_botellas = compute_descriptors(ref_botellas)
-des_latas = compute_descriptors(ref_latas)
-des_cajas = compute_descriptors(ref_cajas)
-
-# ====== Abrir cámara ======
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+# Inicializar cámara (usa 0 si la cámara principal)
+cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
 
 while True:
     ret, frame = cap.read()
     if not ret:
+        print("No se pudo acceder a la cámara")
         break
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     kp_frame, des_frame = orb.detectAndCompute(gray, None)
-    category = "Desconocido"
+    
+    detected = False
+    if des_ref is not None and des_frame is not None:
+        if len(des_ref) >= 2 and len(des_frame) >= 2:  # Evitar error de FLANN
+            matches = flann.knnMatch(des_ref, des_frame, k=2)
 
-    if des_frame is not None:
-        # ====== Comparar ORB para cajas ======
-        matches_caja = [bf.match(des_c, des_frame) for des_c in des_cajas]
-        max_matches_caja = max([len(m) for m in matches_caja], default=0)
+            # Ratio Test de Lowe con validación
+            good_matches = []
+            for match in matches:
+                if len(match) == 2:  # Solo si hay dos vecinos
+                    m, n = match
+                    if m.distance < 0.7 * n.distance:
+                        good_matches.append(m)
 
-        # ====== Detectar botellas y latas por color ======
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            if len(good_matches) > 15:  # Ajusta este número según pruebas
+                detected = True
+                cv2.putText(frame, "Botella Fanta Detectada", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # Color naranja/amarillo (botellas)
-        lower_orange = np.array([10,100,100])
-        upper_orange = np.array([25,255,255])
-        mask_orange = cv2.inRange(hsv, lower_orange, upper_orange)
+    if not detected:
+        cv2.putText(frame, "No se detecta botella", (50, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-        # Color gris/plateado (latas)
-        lower_gray = np.array([0,0,100])
-        upper_gray = np.array([180,50,255])
-        mask_gray = cv2.inRange(hsv, lower_gray, upper_gray)
+    cv2.imshow("Reconocimiento Botella", frame)
 
-        # ====== Asignar categoría ======
-        if np.sum(mask_orange) > 5000:
-            category = "Botella"
-        elif np.sum(mask_gray) > 5000:
-            category = "Lata"
-        else:
-            max_matches = max_matches_caja
-            if max_matches > 8:
-                category = "Caja de juego"
-
-    # Mostrar resultado en la cámara
-    cv2.putText(frame, category, (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-    cv2.imshow("Clasificador", frame)
-
-    if cv2.waitKey(1) & 0xFF == 27:  # ESC para salir
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 cap.release()
