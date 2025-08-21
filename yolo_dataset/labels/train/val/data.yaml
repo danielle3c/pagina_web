@@ -1,0 +1,5 @@
+train: C:/Users/sofid/Nueva carpeta (3)/pagina_web/yolo_dataset/images/train
+val: C:/Users/sofid/Nueva carpeta (3)/pagina_web/yolo_dataset/images/val
+
+nc: 3
+names: ['botella', 'carton', 'lata']
